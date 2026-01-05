@@ -14,7 +14,8 @@ setattr(d, "util", u); u.strtobool = lambda v: 1 if str(v).lower() in ("y", "yes
 # --- CONFIG ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CKPT_PATH = "lag-llama.ckpt"
-SPECIALIZED_PATH = "specialized_v5_final.pt"
+SPECIALIZED_PATH = "specialized_v6_refined.pt"
+
 DATA_FILE = "network_metrics_data.csv"
 
 def get_aligned_predictor(mode="foundation"):
