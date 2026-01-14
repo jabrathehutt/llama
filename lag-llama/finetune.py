@@ -27,7 +27,7 @@ seed_everything(42)
 # --- 2. CONFIG ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOAD_PATH = "specialized_v7_pretrain.pt"
-METRICS_CSV = "network_metrics_data.csv"
+METRICS_CSV = "realistic_traffic_data.csv"
 FINAL_PATH = "specialized_v11_supervised.pt"
 CONTEXT_LEN = 256 
 

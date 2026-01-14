@@ -178,4 +178,4 @@ def generate_full_realistic_dataset():
 
 if __name__ == "__main__":
     final_df = generate_full_realistic_dataset()
-    visualize_and_save(final_df)
+    #visualize_and_save(final_df)
