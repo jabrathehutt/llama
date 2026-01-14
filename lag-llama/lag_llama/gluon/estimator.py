@@ -173,22 +173,16 @@ class LagLlamaEstimator(PyTorchLightningEstimator):
 
         lag_indices = []
         for freq in lags_seq:
-            try:
-                # If the item is an integer (or a string representing an integer), 
-                # use it directly as a lag index.
-                lag_indices.append(int(freq))
-            except ValueError:
-                # If it's a string like "H" or "T", use the original lookup logic.
-                lag_indices.extend(
-                    get_lags_for_frequency(freq_str=freq, num_default_lags=1)
-                )
+            lag_indices.extend(
+                get_lags_for_frequency(freq_str=freq, num_default_lags=1)
+            )
 
         if len(lag_indices):
-            # We remove the "lag_index - 1" logic if providing raw integers, 
-            # as your provided list [1, 2, 3...] already starts at the first lag.
             self.lags_seq = sorted(set(lag_indices))
+            self.lags_seq = [lag_index - 1 for lag_index in self.lags_seq]
         else:
             self.lags_seq = []
+
         self.n_head = n_head
         self.n_layer = n_layer
         self.n_embd_per_head = n_embd_per_head
