@@ -4,55 +4,94 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (Aligned with your previous code) ---
 START_DATE = '2025-01-01 00:00'
 END_DATE = '2025-01-08 00:00'
-FREQUENCY = '10min' 
+FREQUENCY = '10min'  # Aligned with CESNET/TrafPy standard
 OUTPUT_FILE = 'trafpy_master_univariate_data.csv'
-NUM_FLOWS_PER_GROUP = 2 
+NUM_FLOWS_PER_GROUP = 2 # Set to 334 for your full dataset
+
+# AS Constants
+AS_IDS = {'AS100': 100, 'AS200': 200, 'AS300': 300, 'AS400': 400}
+
+# --- TRAFPY VOLUME ENGINE ---
 
 def generate_stochastic_volume(time_index, is_anomaly_array):
+    """Generates bytes using TrafPy distributions based on anomaly state."""
     volumes = []
     events_per_interval = 50
     
     for i in range(len(time_index)):
         if not is_anomaly_array[i]:
-            # Normal: mu=18. Scaled by 1e9 to stay in Gbit range.
-            flow_sizes = val_dists.gen_lognormal_dist(_mu=18, _sigma=2, min_val=1, max_val=1e9, size=events_per_interval)
-            val = sum(flow_sizes) / 1e9 
+            # Normal: Lognormal distribution
+            flow_sizes = val_dists.gen_lognormal_dist(14, 2, 1, 1e7, events_per_interval)
+            multiplier = 1.0
         else:
-            # Anomaly: mu=24 + a forced baseline surge of 5000 Gbits
-            flow_sizes = val_dists.gen_lognormal_dist(_mu=24, _sigma=2, min_val=1, max_val=1e12, size=events_per_interval)
-            val = (sum(flow_sizes) / 1e9) + 5000 
+            # Anomaly: Exponential heavy-tail
+            flow_sizes = val_dists.gen_exponential_dist(0.00001, 1, 1e7, events_per_interval)
+            multiplier = 2.5 # Volume shift magnitude
             
-        volumes.append(val)
+        # Convert sum of bytes to Tbits for your specific column format
+        volumes.append((sum(flow_sizes) * multiplier) / 1e12)
+        
     return np.array(volumes)
+
+# --- MASTER TEMPLATES ---
+
+master_templates = [
+    {
+        'group': 'TrafPy_Backbone_Linear',
+        'asn': {'src': 1001, 'dst': 4001, 'hnd': AS_IDS['AS200'], 'nex': AS_IDS['AS300']},
+        'anomaly_window': ('2025-01-07 04:00', '2025-01-07 10:00')
+    },
+    {
+        'group': 'TrafPy_AS_Shift',
+        'asn': {'src': 5001, 'dst': 5002, 'hnd': AS_IDS['AS300'], 'nex': AS_IDS['AS100']},
+        'anomaly_window': ('2025-01-07 12:00', '2025-01-07 18:00')
+    }
+]
+
+# --- EXECUTION ---
 
 def generate_full_master_dataset():
     time_index = pd.date_range(start=START_DATE, end=END_DATE, freq=FREQUENCY, inclusive='left')
     all_flows = []
-    
-    master_templates = [
-        {'group': 'Backbone_Surge', 'asn': {'src': 1001, 'dst': 4001}, 'anomaly_window': ('2025-01-07 04:00', '2025-01-07 10:00')},
-        {'group': 'AS_Shift', 'asn': {'src': 5001, 'dst': 5002}, 'anomaly_window': ('2025-01-07 12:00', '2025-01-07 18:00')}
-    ]
 
-    print("Generating High-Contrast Gbit Dataset...")
+    print(f"Generating Master Dataset: {len(time_index)} timestamps per flow.")
+
     for template in master_templates:
-        for i in range(NUM_FLOWS_PER_GROUP):
-            is_anomaly = (time_index >= template['anomaly_window'][0]) & (time_index <= template['anomaly_window'][1])
+        print(f"Processing Group: {template['group']}")
+        for i in tqdm(range(NUM_FLOWS_PER_GROUP)):
+            
+            # Metadata
+            src_asn = template['asn']['src'] + i
+            dst_asn = template['asn']['dst'] + i
+            flow_id = f"{src_asn}-{dst_asn}_{template['group']}"
+            
+            # Ground Truth
+            is_anomaly = (time_index >= template['anomaly_window'][0]) & \
+                         (time_index <= template['anomaly_window'][1])
+            
+            # Generate Stochastic Volume
             traffic_volume = generate_stochastic_volume(time_index, is_anomaly)
             
+            # Construct DataFrame
             df = pd.DataFrame({
                 'timestamp': time_index,
-                'traffic_volume_Gbits': traffic_volume, 
+                'traffic_volume_Tbits': traffic_volume,
                 'is_anomaly': is_anomaly,
-                'flow_key_id': f"{template['asn']['src'] + i}-{template['asn']['dst'] + i}_{template['group']}"
+                'flow_key_id': flow_id,
+                'sourceAS': src_asn,
+                'destinationAS': dst_asn,
+                'handoverAS': template['asn']['hnd'],
+                'nexthopAS': template['asn']['nex']
             })
             all_flows.append(df)
 
-    pd.concat(all_flows).to_csv(OUTPUT_FILE, index=False)
-    print("Done. Verification: Anomaly points generated above 5000 Gbits.")
+    final_df = pd.concat(all_flows, ignore_index=True)
+    final_df.to_csv(OUTPUT_FILE, index=False)
+    print(f"\nSaved {len(final_df)} rows to {OUTPUT_FILE}")
+    return final_df
 
 if __name__ == "__main__":
     generate_full_master_dataset()
