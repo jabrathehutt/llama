@@ -1,0 +1,8 @@
+**/__pycache__/
+**/*.h5
+**/*.csv
+**/*.pcap
+**/*.egg-info/
+**/*.so
+**/*.pyc
+.git/
