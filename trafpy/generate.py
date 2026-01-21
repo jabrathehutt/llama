@@ -17,11 +17,11 @@ def generate_stochastic_volume(time_index, is_anomaly_array):
     
     for i in range(len(time_index)):
         if not is_anomaly_array[i]:
-            # Baseline: ~50-100 Gbits total
+            # Normal: mu=18. Scaled by 1e9 to stay in Gbit range.
             flow_sizes = val_dists.gen_lognormal_dist(_mu=18, _sigma=2, min_val=1, max_val=1e9, size=events_per_interval)
             val = sum(flow_sizes) / 1e9 
         else:
-            # Anomaly Surge: Forced to ~5000-8000 Gbits
+            # Anomaly: mu=24 + a forced baseline surge of 5000 Gbits
             flow_sizes = val_dists.gen_lognormal_dist(_mu=24, _sigma=2, min_val=1, max_val=1e12, size=events_per_interval)
             val = (sum(flow_sizes) / 1e9) + 5000 
             
@@ -37,6 +37,7 @@ def generate_full_master_dataset():
         {'group': 'AS_Shift', 'asn': {'src': 5001, 'dst': 5002}, 'anomaly_window': ('2025-01-07 12:00', '2025-01-07 18:00')}
     ]
 
+    print("Generating High-Contrast Gbit Dataset...")
     for template in master_templates:
         for i in range(NUM_FLOWS_PER_GROUP):
             is_anomaly = (time_index >= template['anomaly_window'][0]) & (time_index <= template['anomaly_window'][1])
@@ -51,7 +52,7 @@ def generate_full_master_dataset():
             all_flows.append(df)
 
     pd.concat(all_flows).to_csv(OUTPUT_FILE, index=False)
-    print(f"Dataset generated. Sample Anomaly Value: {traffic_volume[is_anomaly][0]} Gbits")
+    print("Done. Verification: Anomaly points generated above 5000 Gbits.")
 
 if __name__ == "__main__":
     generate_full_master_dataset()

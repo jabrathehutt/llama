@@ -17,19 +17,21 @@ def visualize_stochastic_traffic(csv_file):
     ax1.axvspan(flow_data[flow_data['is_anomaly']]['timestamp'].min(), 
                 flow_data[flow_data['is_anomaly']]['timestamp'].max(), 
                 color='red', alpha=0.3, label='Anomaly Surge')
-    ax1.set_title(f"Univariate Traffic Flow (Gbit Scale): {flow_id}")
+    ax1.set_title(f"Traffic Flow Surge: {flow_id}")
+    ax1.set_ylabel("Volume (Gbits)")
     ax1.set_ylim(0, flow_data[col].max() * 1.1)
     ax1.legend()
 
     # PANEL 2: Distributions
     sns.kdeplot(flow_data[flow_data['is_anomaly']==False][col], ax=ax2, fill=True, label='Normal')
     sns.kdeplot(flow_data[flow_data['is_anomaly']==True][col], ax=ax2, fill=True, color='red', label='Anomaly')
-    ax2.set_title("Statistical Signature Shift")
+    ax2.set_title("Statistical Distribution Shift")
+    ax2.set_xlabel("Volume (Gbits)")
     ax2.legend()
 
     plt.tight_layout()
     plt.savefig('trafpy_visualization.png')
-    print("Plot updated.")
+    print("Plot updated with visible Gbit surge.")
 
 if __name__ == "__main__":
     visualize_stochastic_traffic('trafpy_master_univariate_data.csv')
