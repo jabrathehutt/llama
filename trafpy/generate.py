@@ -26,13 +26,14 @@ def generate_stochastic_volume(time_index, is_anomaly_array):
             # Normal: Lognormal distribution
             flow_sizes = val_dists.gen_lognormal_dist(25, 2, 1, 1e12, events_per_interval)
             multiplier = 1.0
+            volumes.append(sum(flow_sizes) / 1e12)
         else:
             # Anomaly: Exponential heavy-tail
             flow_sizes = val_dists.gen_lognormal_dist(30, 2, 1, 1e15, events_per_interval)
             multiplier = 5 # Volume shift magnitude
             
         # Convert sum of bytes to Tbits for your specific column format
-        volumes.append((sum(flow_sizes) / 1e12) + 0.0005)
+            volumes.append((sum(flow_sizes) / 1e12) + 0.0005)
         
     return np.array(volumes)
 
