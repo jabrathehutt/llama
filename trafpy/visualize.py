@@ -31,7 +31,7 @@ def visualize_stochastic_traffic_single_panel(csv_file):
                     color='red', alpha=0.15, label='Anomaly Window')
 
     # 4. Clean up Annotations and Formatting
-    ax1.set_title(f"Traffic Flow: {flow_id}", fontsize=14, pad=15)
+    ax1.set_title(f"Anomalous Inter-domain Traffic Data", fontsize=14, pad=15)
     ax1.set_ylabel("Traffic Volume (Tbits)", fontsize=12)
     ax1.set_xlabel("Timestamp", fontsize=12)
     
