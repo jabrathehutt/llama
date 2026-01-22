@@ -19,22 +19,21 @@ def visualize_prophet_force_aligned():
     # 2. Force Alignment: Grab the first available flow from each
     train_flow_id = df_train_raw['flow_key_id'].unique()[0]
     test_flow_id = df_test_raw['flow_key_id'].unique()[0]
-    
+
     print(f"Aligning Training Flow: {train_flow_id}")
     print(f"With Testing Flow:    {test_flow_id}")
-    
+
     df_train = df_train_raw[df_train_raw['flow_key_id'] == train_flow_id].copy()
     df_test = df_test_raw[df_test_raw['flow_key_id'] == test_flow_id].copy()
 
     # 3. Standardize column names for Prophet
     df_train = df_train.rename(columns={'timestamp': 'ds', 'traffic_volume_Tbits': 'y'})
     df_test = df_test.rename(columns={'timestamp': 'ds', 'traffic_volume_Tbits': 'y'})
-    
+
     df_train['ds'] = pd.to_datetime(df_train['ds'])
     df_test['ds'] = pd.to_datetime(df_test['ds'])
 
     # 4. Train Prophet on CLEAN baseline
-    # We focus on daily seasonality to capture the 'Normal' pattern
     m = Prophet(interval_width=CONFIDENCE_INTERVAL, daily_seasonality=True)
     m.fit(df_train)
 
@@ -42,16 +41,12 @@ def visualize_prophet_force_aligned():
     future = pd.DataFrame({'ds': df_test['ds']})
     forecast = m.predict(future)
 
-    # 6. Apply your High-Recall Detection Logic
+    # 6. Apply High-Recall Detection Logic
     df_pred = df_test.merge(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']], on='ds')
     df_pred['uncertainty'] = df_pred['yhat_upper'] - df_pred['yhat_lower']
-    
-    # Calculate the scaled thresholds
+
     df_pred['upper_threshold'] = df_pred['yhat'] + (THRESHOLD_FACTOR * df_pred['uncertainty'])
     df_pred['lower_threshold'] = df_pred['yhat'] - (THRESHOLD_FACTOR * df_pred['uncertainty'])
-    
-    # Point-by-point detection (Should yield 100% recall)
-    df_pred['is_detected'] = (np.abs(df_pred['y'] - df_pred['yhat']) > THRESHOLD_FACTOR * df_pred['uncertainty']).astype(int)
 
     # 7. Select a window around the anomaly
     anomaly_hits = df_pred[df_pred['is_anomaly'] == 1]
@@ -61,27 +56,31 @@ def visualize_prophet_force_aligned():
     else:
         plot_df = df_pred.iloc[:200].copy()
 
-    # 8. Visualization with Clean Timestamps
-    fig, (ax1) = plt.subplots(1, 1, figsize=(15, 10), sharex=True)
+    # 8. Visualization (Single Panel Only)
+    # Note: subplot(1,1,1) or just subplots() works here
+    fig, ax = plt.subplots(figsize=(15, 7)) 
 
-    # Top Panel: Detection Boundaries
-    ax1.plot(plot_df['ds'], plot_df['y'], label='Actual Traffic (Test)', color='#1f77b4', zorder=3)
-    ax1.plot(plot_df['ds'], plot_df['yhat'], label='Prophet Predicted Baseline', color='#ff7f0e', linestyle='--')
-    ax1.fill_between(plot_df['ds'], plot_df['lower_threshold'], plot_df['upper_threshold'], 
-                     color='#ff7f0e', alpha=0.15, label=f'Detection Zone ({THRESHOLD_FACTOR}x Uncertainty)')
-    
-    ax1.set_title(f"Prophet: Detection Performance (Recall 1.0, Delay 0.00)", fontsize=14)
-    ax1.set_ylabel("Traffic Volume (Tbits)")
-    ax1.legend(loc='upper left')
-    ax1.grid(True, linestyle=':', alpha=0.6)
+    # Plotting Boundaries and Traffic
+    ax.plot(plot_df['ds'], plot_df['y'], label='Actual Traffic', color='#1f77b4', zorder=3)
+    ax.plot(plot_df['ds'], plot_df['yhat'], label='Prophet Predicted Baseline', color='#ff7f0e', linestyle='--')
+    ax.fill_between(plot_df['ds'], plot_df['lower_threshold'], plot_df['upper_threshold'],
+                     color='#ff7f0e', alpha=0.15, label=f'Detection Zone')
 
-    ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
+    # Labels and Titles
+    ax.set_title(f"Prophet Traffic Detection", fontsize=14)
+    ax.set_ylabel("Traffic Volume (Tbits)")
+    ax.set_xlabel("Timestamp")
+    ax.legend(loc='upper left')
+    ax.grid(True, linestyle=':', alpha=0.6)
+
+    # --- TIMESTAMP FORMATTING ---
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
     plt.xticks(rotation=30, ha='right')
 
     plt.tight_layout()
-    plt.savefig("prophet_visual.png", dpi=300)
-    print("Success: Visualization saved to prophet_visual.png")
+    plt.savefig("prophet.png", dpi=300)
+    print("Success: Visualization saved to prophet.png")
     plt.show()
 
 if __name__ == "__main__":
