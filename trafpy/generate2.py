@@ -10,7 +10,7 @@ START_DATE = '2025-01-01 00:00'
 END_DATE = '2025-01-08 00:00'
 FREQUENCY = '10min' 
 OUTPUT_FILE = 'trafpy_master_univariate_data.csv'
-NUM_FLOWS = 50
+NUM_FLOWS = 5
 
 def generate_hard_master_dataset():
     time_index = pd.date_range(START_DATE, END_DATE, freq=FREQUENCY, inclusive='left')

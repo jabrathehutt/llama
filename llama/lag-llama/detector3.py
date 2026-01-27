@@ -1,125 +1,115 @@
 import pandas as pd
 import numpy as np
 import torch
-from gluonts.dataset.pandas import PandasDataset
-from sklearn.metrics import precision_score, recall_score, f1_score
+from tqdm import tqdm
+from gluonts.dataset.common import ListDataset
+from gluonts.evaluation import make_evaluation_predictions
 from lag_llama.gluon.estimator import LagLlamaEstimator
 from lag_llama.gluon.lightning_module import LagLlamaLightningModule
 from gluonts.torch.distributions import StudentTOutput
-from tqdm import tqdm
-import warnings
+from sklearn.metrics import f1_score, precision_score, recall_score
 
-warnings.filterwarnings("ignore")
+# --- OFFICIAL ARCHITECTURE CONSTANTS ---
+# Lags used for tokenization across frequencies [cite: 98, 102]
+LAG_INDICES = [1, 2, 3, 4, 5, 6, 7, 12, 24, 48, 72, 168]
+CONTEXT_LENGTH = 32 # Standard context window size [cite: 522]
+NUM_SAMPLES = 100    # Samples for probabilistic uncertainty [cite: 209]
 
-# --- CONFIGURATION ---
-DATA_FILE = "/root/traffic-shifts/trafpy/trafpy_master_univariate_data.csv"
-CKPT_PATH = "specialized_v11_supervised.pt"
-TARGET_COLUMN = 'traffic_volume_Tbits'
-SERIES_ID_COLUMN = 'flow_key_id'
-CONTEXT_LENGTH = 32  
-UPPER_QUANTILE = 0.95 
-NUM_SAMPLES = 100 
-FREQ = '10min'
-CHUNK_SIZE = 5 # Smaller chunks to ensure immediate terminal feedback
-
-def run_evaluation():
-    # 1. Load Data
-    print("Reading data...")
-    df = pd.read_csv(DATA_FILE)
+def run_full_history_inference():
+    # 1. LOAD DATA
+    df = pd.read_csv("/root/traffic-shifts/trafpy/trafpy_master_univariate_data.csv")
     df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df[TARGET_COLUMN] = df[TARGET_COLUMN].astype(np.float32)
-    df['is_anomaly'] = df['is_anomaly'].astype(bool)
+    df['traffic_volume_Tbits'] = df['traffic_volume_Tbits'].astype(np.float32)
     
-    if 'actual_start' in df.columns:
-        df['actual_start'] = pd.to_datetime(df['actual_start'])
-
-    # 2. Initialize Module
-    print(f"Loading weights from {CKPT_PATH}...")
-    lags_seq = [1, 2, 3, 4, 5, 6, 7, 12, 24, 48, 72, 168]
-    
+    # 2. INITIALIZE OFFICIAL MODULE [cite: 108, 112]
     module = LagLlamaLightningModule(
         context_length=CONTEXT_LENGTH,
         prediction_length=1,
         model_kwargs={
-            "input_size": 1, "context_length": CONTEXT_LENGTH, "max_context_length": 2048,
-            "lags_seq": lags_seq, "distr_output": StudentTOutput(),
-            "n_layer": 8, "n_embd_per_head": 32, "n_head": 8,
-            "scaling": "mean", "time_feat": False,
+            "input_size": 1,
+            "context_length": CONTEXT_LENGTH,
+            "max_context_length": 2048,
+            "distr_output": StudentTOutput(), # Student's t-distribution 
+            "n_layer": 8,
+            "n_embd_per_head": 32,
+            "n_head": 8,
+            "scaling": "mean", # Standard magnitude scaling 
+            "time_feat": False,
+            "lags_seq": LAG_INDICES,
         }
     )
 
-    state_dict = torch.load(CKPT_PATH, map_location=torch.device('cpu'))
-    if 'state_dict' in state_dict: 
-        state_dict = state_dict['state_dict']
+    # 3. LOAD SPECIALIZED WEIGHTS
+    checkpoint = torch.load("specialized_v11_supervised.pt", map_location="cpu")
+    state_dict = checkpoint.get("state_dict", checkpoint)
+    state_dict = {k.replace('model.', ''): v for k, v in state_dict.items()}
+    module.load_state_dict(state_dict, strict=False)
+    module.eval()
+
+    # 4. PREPARE ROLLING WINDOWS (Predicting every point in history)
+    unique_ids = df['flow_key_id'].unique()[:5]
+    rolling_windows = []
     
-    new_state_dict = {k.replace('model.', ''): v for k, v in state_dict.items()}
-    module.load_state_dict(new_state_dict, strict=False)
-    module = module.to(torch.device('cpu')).float().eval()
-
-    # 3. Predictor
-    estimator = LagLlamaEstimator(prediction_length=1, context_length=CONTEXT_LENGTH)
-    predictor = estimator.create_predictor(transformation=estimator.create_transformation(), module=module)
-
-    # 4. Inference with ACTIVE progress tracking
-    unique_ids = df[SERIES_ID_COLUMN].unique()
-    all_preds = []
-
-    print(f"Starting inference for {len(unique_ids)} flows...")
-    
-    # We use tqdm here to track progress across flows
-    for i in range(0, len(unique_ids), CHUNK_SIZE):
-        chunk_ids = unique_ids[i:i + CHUNK_SIZE]
-        chunk_df = df[df[SERIES_ID_COLUMN].isin(chunk_ids)]
+    print("Preparing full history windows...")
+    for flow_id in unique_ids:
+        flow_df = df[df['flow_key_id'] == flow_id].sort_values('timestamp')
+        target_vals = flow_df['traffic_volume_Tbits'].values
         
-        dataset = PandasDataset.from_long_dataframe(
-            chunk_df, target=TARGET_COLUMN, item_id=SERIES_ID_COLUMN, 
-            timestamp="timestamp", freq=FREQ, dtype=np.float32
-        )
+        # We need at least 32 points of context before we can predict [cite: 106]
+        for i in range(CONTEXT_LENGTH, len(flow_df)):
+            rolling_windows.append({
+                "start": flow_df['timestamp'].iloc[0],
+                "target": target_vals[:i],
+                "item_id": f"{flow_id}|{i}" # Store index to map back to truth
+            })
 
-        with torch.no_grad():
-            forecast_it = predictor.predict(dataset, num_samples=NUM_SAMPLES)
-            # The "Killed" or "Hanging" usually happens when converting the generator to a list.
-            # We process them one by one to keep memory low and the CPU active.
-            for forecast in tqdm(forecast_it, total=len(chunk_ids), desc=f"Group {i//CHUNK_SIZE + 1}", leave=False):
-                q95 = np.quantile(forecast.samples, UPPER_QUANTILE, axis=0)
-                all_preds.append({
-                    SERIES_ID_COLUMN: forecast.item_id,
-                    "timestamp": forecast.start_date.to_timestamp(),
-                    "q95_limit": q95[0],
-                    "median_pred": np.median(forecast.samples)
-                })
+    dataset = ListDataset(rolling_windows, freq="10min")
 
-    # 5. Result Merging
-    print("\nProcessing metrics...")
-    pred_df = pd.DataFrame(all_preds)
-    results = df.merge(pred_df, on=['timestamp', SERIES_ID_COLUMN], how='inner')
-    results['y_pred'] = results[TARGET_COLUMN] > results['q95_limit']
+    # 5. EXECUTE OFFICIAL PREDICTOR
+    estimator = LagLlamaEstimator(prediction_length=1, context_length=CONTEXT_LENGTH, batch_size=64)
+    predictor = estimator.create_predictor(
+        transformation=estimator.create_transformation(),
+        module=module
+    )
 
-    # 6. Evaluation
-    f1 = f1_score(results['is_anomaly'], results['y_pred'], zero_division=0)
-    prec = precision_score(results['is_anomaly'], results['y_pred'], zero_division=0)
-    rec = recall_score(results['is_anomaly'], results['y_pred'], zero_division=0)
+    print(f"Analyzing {len(rolling_windows)} total historical points...")
+    forecast_it, ts_it = make_evaluation_predictions(
+        dataset=dataset,
+        predictor=predictor,
+        num_samples=NUM_SAMPLES
+    )
 
-    # Delay Calculation
+    forecasts = list(tqdm(forecast_it, total=len(dataset), desc="Forecasting History"))
     
-    delays = []
-    results['event_id'] = (results['is_anomaly'] != results['is_anomaly'].shift()).cumsum()
-    for _, event in results[results['is_anomaly']].groupby('event_id'):
-        detections = event[event['y_pred']]
-        if not detections.empty:
-            delay = (detections['timestamp'].min() - event['actual_start'].iloc[0]).total_seconds() / 60.0
-            delays.append(max(0, delay))
+    # 6. CALCULATE PERFORMANCE
+    all_results = []
+    for forecast in forecasts:
+        flow_id, idx_str = forecast.item_id.split('|')
+        idx = int(idx_str)
+        
+        # Threshold: Value exceeds the 95th percentile [cite: 125, 543]
+        q95 = np.quantile(forecast.samples, 0.95, axis=0)[0]
+        
+        actual_row = df[(df['flow_key_id'] == flow_id)].iloc[idx]
+        actual_val = actual_row['traffic_volume_Tbits']
+        
+        all_results.append({
+            "ground_truth": int(actual_row['is_anomaly']),
+            "prediction": 1 if actual_val > q95 else 0
+        })
 
-    print("\n" + "="*50)
-    print("THESIS PERFORMANCE SUMMARY")
-    print("-" * 50)
-    print(f"F1 Score:  {f1:.4f} (P: {prec:.4f}, R: {rec:.4f})")
-    if delays:
-        print(f"Avg Delay: {np.mean(delays):.2f} minutes")
-    print(f"Detections: {results['y_pred'].sum()} / {results['is_anomaly'].sum()} true anomalies")
-    print("="*50)
-
-    results.to_csv("lag_llama_eval_debug.csv", index=False)
+    res_df = pd.DataFrame(all_results)
+    
+    # 7. FINAL REPORT
+    f1 = f1_score(res_df['ground_truth'], res_df['prediction'], zero_division=0)
+    print("\n" + "="*40)
+    print("FULL HISTORY EVALUATION")
+    print("-" * 40)
+    print(f"F1-Score:  {f1:.4f}")
+    print(f"Precision: {precision_score(res_df['ground_truth'], res_df['prediction'], zero_division=0):.4f}")
+    print(f"Recall:    {recall_score(res_df['ground_truth'], res_df['prediction'], zero_division=0):.4f}")
+    print(f"Total Points: {len(res_df)}")
+    print("="*40)
 
 if __name__ == "__main__":
-    run_evaluation()
+    run_full_history_inference()
